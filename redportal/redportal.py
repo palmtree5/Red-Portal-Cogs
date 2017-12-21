@@ -1,14 +1,14 @@
-from cogs.utils.checks import is_owner_check
 from urllib.parse import quote
 import discord
 from discord.ext import commands
 import aiohttp
 
+from redbot.core.context import RedContext
+
 
 numbs = {
     "next": "➡",
     "back": "⬅",
-    "install": "✅",
     "exit": "❌"
 }
 
@@ -19,21 +19,21 @@ class Redportal:
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.group(pass_context=True, aliases=['redp'])
-    async def redportal(self, ctx):
+    @commands.group(aliases=['redp'])
+    async def redportal(self, ctx: RedContext):
         """Interact with cogs.red through your bot"""
 
         if ctx.invoked_subcommand is None:
-            await self.bot.send_cmd_help(ctx)
+            await ctx.send_help()
 
-    async def _search_redportal(self, ctx, url):
+    async def _search_redportal(self, ctx: RedContext, url):
         # future response dict
         data = None
 
         try:
-            async with aiohttp.get(url, headers={"User-Agent": "Sono-Bot"}) as response:
-                data = await response.json()
-
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers={"User-Agent": "Sono-Bot"}) as response:
+                    data = await response.json()
         except:
             return None
 
@@ -61,119 +61,85 @@ class Redportal:
                                                     ))
                 embeds.append(embed)
 
-            return embeds, data
+            return embeds
 
         else:
             return None
 
-    @redportal.command(pass_context=True)
-    async def search(self, ctx, *, term: str):
+    @redportal.command()
+    async def search(self, ctx: RedContext, *, term: str):
         """Searches for a cog"""
 
-        try:
-            # base url for the cogs.red search API
-            base_url = 'https://cogs.red/api/v1/search/cogs'
+        # base url for the cogs.red search API
+        base_url = 'https://cogs.red/api/v1/search/cogs'
 
-             # final request url
-            url = '{}/{}'.format(base_url, quote(term))
+         # final request url
+        url = '{}/{}'.format(base_url, quote(term))
 
-            embeds, data = await self._search_redportal(ctx, url)
+        embeds = await self._search_redportal(ctx, url)
 
-            if embeds is not None:
-                await self.cogs_menu(ctx, embeds, message=None, page=0, timeout=30, edata=data)
-            else:
-                await self.bot.say('No cogs were found or there was an error in the process')
+        if embeds is not None:
+            await self.cogs_menu(ctx, embeds, message=None, page=0, timeout=30)
+        else:
+            await ctx.send('No cogs were found or there was an error in the process')
 
-        except TypeError:
-            await self.bot.say('No cogs were found or there was an error in the process')
-
-    async def cogs_menu(self, ctx, cog_list: list,
+    async def cogs_menu(self, ctx: RedContext, cog_list: list,
                         message: discord.Message=None,
-                        page=0, timeout: int=30, edata=None):
+                        page=0, timeout: int=30):
         """menu control logic for this taken from
            https://github.com/Lunar-Dust/Dusty-Cogs/blob/master/menu/menu.py"""
         cog = cog_list[page]
-    
-        is_owner_or_co = is_owner_check(ctx)
-        if is_owner_or_co:
-            expected = ["➡", "✅", "⬅", "❌"]
-        else:
-            expected = ["➡", "⬅", "❌"] 
+        expected = ["➡", "⬅", "❌"]
 
         if not message:
             message =\
-                await self.bot.send_message(ctx.message.channel, embed=cog)
-            await self.bot.add_reaction(message, "⬅")
-            await self.bot.add_reaction(message, "❌")
-
-            if is_owner_or_co:
-                await self.bot.add_reaction(message, "✅")
-
-            await self.bot.add_reaction(message, "➡")
+                await ctx.send(embed=cog)
+            await message.add_reaction("⬅")
+            await message.add_reaction("❌")
+            await message.add_reaction("➡")
         else:
-            message = await self.bot.edit_message(message, embed=cog)
-        react = await self.bot.wait_for_reaction(
-            message=message, user=ctx.message.author, timeout=timeout,
-            emoji=expected
-        )
-        if react is None:
+            await message.edit(embed=cog)
+
+        def react_check(reaction, user):
+            return user == ctx.author \
+                   and str(reaction.emoji) in expected
+        try:
+            react, _ = await self.bot.wait_for(
+                "reaction_add", timeout=timeout, check=react_check
+            )
+        except:
             try:
                 try:
-                    await self.bot.clear_reactions(message)
+                    await message.clear_reactions()
                 except:
-                    await self.bot.remove_reaction(message, "⬅", self.bot.user)
-                    await self.bot.remove_reaction(message, "❌", self.bot.user)
-                    if is_owner_or_co:
-                        await self.bot.remove_reaction(message, "✅", self.bot.user)
-                    await self.bot.remove_reaction(message, "➡", self.bot.user)
+                    await message.remove_reaction("⬅", self.bot.user)
+                    await message.remove_reaction("❌", self.bot.user)
+                    await message.remove_reaction("➡", self.bot.user)
             except:
                 pass
             return None
         reacts = {v: k for k, v in numbs.items()}
-        react = reacts[react.reaction.emoji]
+        react = reacts[react.emoji]
         if react == "next":
             page += 1
             next_page = page % len(cog_list)
             try:
-                await self.bot.remove_reaction(message, "➡", ctx.message.author)
+                await message.remove_reaction("➡", ctx.author)
             except:
                 pass
             return await self.cogs_menu(ctx, cog_list, message=message,
-                                        page=next_page, timeout=timeout, edata=edata)
+                                        page=next_page, timeout=timeout)
         elif react == "back":
             page -= 1
             next_page = page % len(cog_list)
             try:
-                await self.bot.remove_reaction(message, "⬅", ctx.message.author)
+                await message.remove_reaction("⬅", ctx.author)
             except:
                 pass
             return await self.cogs_menu(ctx, cog_list, message=message,
-                                        page=next_page, timeout=timeout, edata=edata)
-        elif react == "install":
-            if not is_owner_or_co:
-                await self.bot.say("This function is only available to the bot owner.")
-                return await self.cogs_menu(ctx, cog_list, message=message,
-                                            page=page, timeout=timeout, edata=edata)
-            else:
-                INSTALLER = self.bot.get_cog('Downloader')
-                if not INSTALLER:
-                    await self.bot.say("The downloader cog must be loaded to use this feature.")
-                    return await self.cogs_menu(ctx, cog_list, message=message,
-                                                page=page, timeout=timeout, edata=edata)
-
-                repo1, repo2 = edata['results']['list'][page]['repo']['name'], edata['results']['list'][page]['links']['github']['repo']
-                cog1, cog2 = edata['results']['list'][page]['repo']['name'], edata['results']['list'][page]['name']
-
-                await ctx.invoke(INSTALLER._repo_add, repo1, repo2)
-                await ctx.invoke(INSTALLER._install, cog1, cog2)
-
-                return await self.bot.delete_message(message)
+                                        page=next_page, timeout=timeout)
         else:
             try:
-                return await self.bot.delete_message(message)
+                return await message.delete()
             except:
                 pass
-
-
-def setup(bot):
-    bot.add_cog(Redportal(bot))
